@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/nim_cache_guard.sh",
+            "timeout": 10,
+            "statusMessage": "Checking NIM cache..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/secrets_guard.sh",
+            "timeout": 10,
+            "statusMessage": "Checking for secret exposure..."
+          }
+        ]
+      }
+    ]
+  }
+}

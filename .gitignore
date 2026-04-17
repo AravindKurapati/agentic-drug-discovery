@@ -1,0 +1,17 @@
+.env
+*key*.txt
+*secret*.txt
+*token*.txt
+*api*.txt
+command-log.txt
+.nim_cache/
+__pycache__/
+*.pyc
+*.pyo
+.chroma/
+chroma_db/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
