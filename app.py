@@ -70,25 +70,32 @@ def run_pipeline(target: str, max_candidates: int, dry_run: bool) -> dict:
         return {"report": report, "candidates_evaluated": max_candidates, "kept_count": 0}
 
     # ---------------------------------------------------------------------------
-    # Live run — import nat only here to avoid startup failures when not installed
+    # Live run — NAT runner
     # ---------------------------------------------------------------------------
-    # TODO: wire up nat runner
-    #   import nat
-    #   runner = nat.load_config("config/workflow.yaml")
-    #   result  = runner.run(input=target, max_candidates=max_candidates)
-    #   return {"report": result.output, ...}
-    # ---------------------------------------------------------------------------
+    api_key = os.environ.get("NVIDIA_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "NVIDIA_API_KEY is not set. Add it to .env before running a live pipeline."
+        )
 
-    # Stub: simulate pipeline progress, then return a placeholder report.
-    for idx, step in enumerate(STEPS, start=1):
-        print(f"[step {idx}/{total}] {step} ... starting")
-        # TODO: replace with real nat runner step event
-        print(f"[step {idx}/{total}] {step} ... done")
+    import asyncio
+    from nat.runtime.loader import load_workflow
 
-    report = (
-        f"# Drug Discovery Report — {target}\n\n"
-        "_Pipeline stub: replace run_pipeline() body with nat runner wiring._\n"
+    prompt = (
+        f"Design up to {max_candidates} binder candidates for target {target}."
     )
+
+    print(f"[step 1/{total}] fetch_sequence ... starting")
+
+    async def _run_nat() -> str:
+        async with load_workflow("config/workflow.yaml") as workflow:
+            async with workflow.run(prompt) as runner:
+                return await runner.result(to_type=str)
+
+    report = asyncio.run(_run_nat())
+
+    print(f"[step {total}/{total}] generate_report ... done")
+
     return {"report": report, "candidates_evaluated": max_candidates, "kept_count": 0}
 
 
