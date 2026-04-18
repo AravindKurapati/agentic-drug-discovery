@@ -1,6 +1,6 @@
 # Implementation State
 
-Last updated: 2026-04-17 (session 2)
+Last updated: 2026-04-17 (session 3)
 
 ## Completed
 
@@ -19,15 +19,15 @@ Last updated: 2026-04-17 (session 2)
 | `agent/workflow.py` | bca33b5 | 7 @register_function tools with DECISION_A/B logging |
 
 | `report/template.md` | 59bff51 | 5-section report template: metadata, candidates table, decision log, literature, summary |
-| `app.py` | b4caceb | CLI: --target, --output-dir, --max-candidates, --dry-run; run_pipeline stub with TODO wiring |
-| `validate/egfr_run.py` | 5e4fa98 | dry-run smoke test (pytest); seeds dummy cache, asserts report created with expected sections |
+| `app.py` | 4bbfa8e | CLI wired to NAT runner; NVIDIA_API_KEY fast-fail; dry-run path unchanged |
+| `agent/tools/nim_cache.py` | 4bbfa8e | CacheMissError added; NIM_DRY_RUN env var guard on cache miss |
+| `validate/egfr_run.py` | 5e4fa98 | dry-run smoke test (pytest); 1 passed |
 
 ## Not Yet Built
 
 | File | Description |
 |------|-------------|
 | `validate/pcsk9_run.py` | PCSK9 end-to-end validation |
-| nat runner wiring | `run_pipeline()` in `app.py` — stub awaiting `nat.load_config()` / runner API wiring |
 
 ## Known Constraints
 
@@ -39,4 +39,4 @@ Last updated: 2026-04-17 (session 2)
 | **Credit budget** | ~17 NIM calls per fresh run; 0 on cache hits |
 | **nat module** | v1.6.0 — `aiq` alias fully removed; use `nat.*` imports everywhere |
 | **AF2-Multimer response** | Assumes `result["pdbs"][0]` is the PDB string; verify against live NIM response on first run |
-| **nat runner wiring** | `run_pipeline()` in `app.py` is a stub — needs `nat.load_config("config/workflow.yaml")` runner API wired up for live runs |
+| **dry-run LLM limitation** | `--dry-run` uses a synthetic placeholder report (not the NAT runner) — the ReAct LLM can't be cached, so dry-run only validates CLI/file plumbing |
