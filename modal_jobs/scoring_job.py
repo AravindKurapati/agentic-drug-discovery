@@ -12,6 +12,8 @@ from agent.tools.scoring import score_complex
 
 app = modal.App("drug-discovery-scoring")
 
+image = modal.Image.debian_slim().pip_install("biopython", "requests", "python-dotenv", "numpy")
+
 
 def _score_single(candidate: dict) -> dict:
     """
@@ -39,7 +41,7 @@ def _score_single(candidate: dict) -> dict:
     }
 
 
-@app.function(gpu="T4")
+@app.function(gpu="T4", image=image)
 def score_candidate(candidate: dict) -> dict:
     """Modal entry point — one isolated container invocation per candidate."""
     return _score_single(candidate)
