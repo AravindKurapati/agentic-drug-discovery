@@ -1,51 +1,68 @@
 # Next Steps — Agentic Drug Discovery
 
-_Last updated: 2026-04-25_
+_Last updated: 2026-04-27_
 
 ---
 
-## Status: Pipeline runs end-to-end for EGFR ✓
+## Status
 
-The full pipeline (ESMFold → RFdiffusion → ProteinMPNN → proxy scoring → report) completes
-successfully. AF2-Multimer is confirmed unavailable on the NVIDIA free tier (persistent 504).
-A circuit breaker was added so the pipeline falls back to proxy scoring immediately after the
-first 504 rather than waiting 900 s per candidate.
+- ✅ Pipeline runs end-to-end for EGFR (dry-run verified)
+- ✅ FastAPI backend + SSE streaming merged (PR #1)
+- ✅ React/Vite frontend with live run dashboard merged (PR #1)
+- ✅ RAG ingest done — `egfr_abstracts` (135 docs), `pcsk9_abstracts` (92 docs) in `.chroma/`
 
 ---
 
-## What to do next (in order)
+## Next session — pick up here
 
-### 1. Run RAG ingest for EGFR  ← do this first
+### 1. Live EGFR run with the UI open  ← do this first
+Burns NIM credits but the cache makes re-runs free. This is the moment of truth
+for the SSE event stream, log parsing, decision card rendering, scatter plot,
+and 3Dmol viewer.
+
 ```bash
-python rag/ingest.py --target EGFR --max-papers 100
-```
-The literature section of every EGFR report is currently empty. This populates the ChromaDB
-index so the report shows real supporting abstracts.
+# terminal 1
+uvicorn api.main:app --port 8000
 
-### 2. Re-run EGFR with literature populated
+# terminal 2
+cd web && npm run dev    # http://localhost:5173
+```
+
+Then in the browser: New run → target `EGFR`, max candidates 5, AF2-Multimer
+off, dry-run off → Run pipeline. Watch all four tabs (Live, Candidates,
+Literature, Report). Verify:
+- step strip advances 1 → 7
+- DECISION_A and DECISION_B cards render
+- scatter plot has dots in the green/amber zones
+- Literature tab shows PMID accordion entries (RAG is now populated)
+- Report tab renders + the .md download works
+- 3Dmol viewer renders for at least one kept candidate (won't render for
+  proxy-scored candidates with empty `pdb`)
+
+### 2. PCSK9 validation run
+Same flow as EGFR — second target per `CLAUDE.md`.
+
+### 3. Run proxy calibration once
 ```bash
-python app.py --target EGFR --max-candidates 5
+python validate/calibrate_proxy.py
 ```
-Verify the Literature Context section now shows PMID entries.
+Pulls 1IVO, 2P4E, 3BKX from RCSB and prints contact counts + pDockQ at
+hypothetical pLDDT levels. Sanity-checks the discard threshold.
 
-### 3. Validate on PCSK9
+### 4. Periodic AF2-Multimer probe
 ```bash
-python rag/ingest.py --target PCSK9 --max-papers 100
-python app.py --target PCSK9 --max-candidates 5
+python -m validate.probe_af2_multimer
 ```
-EGFR was the smoke-test target. PCSK9 is the second validation target per CLAUDE.md.
+Returns 0 if the hosted endpoint is alive. Run occasionally — if it ever
+flips on, the circuit breaker uses real pDockQ automatically.
 
-### 4. Improve proxy pDockQ calibration (optional, nice-to-have)
-The current proxy formula `0.45 - (mpnn_score - 0.5) * 0.233` is a linear rescale over
-[0.5, 2.0]. It differentiates candidates correctly but the absolute values are uncalibrated
-(not correlated with real pDockQ). If AF2-Multimer ever becomes available, run one batch
-with real pDockQ to calibrate the proxy against ground truth.
+---
 
-### 5. AF2-Multimer free-tier status (check periodically)
-The hosted endpoint `health.api.nvidia.com/v1/biology/deepmind/alphafold2-multimer` is
-confirmed "Downloadable" (self-host intended). Check the NVIDIA API catalog occasionally
-to see if hosted capacity improves. The circuit breaker and probe script are in place —
-just re-run `python -m validate.probe_af2_multimer` to test.
+## Polish (only if showing this off)
+
+- README screenshots / quickstart for the web UI
+- Persist `JobStore` beyond process lifetime (currently in-memory; server
+  restart wipes the sidebar)
 
 ---
 
@@ -57,3 +74,4 @@ just re-run `python -m validate.probe_af2_multimer` to test.
 | Proxy pDockQ formula | `0.45 - (mpnn_score - 0.5) * 0.233`, clamped to [0.10, 0.45] |
 | RFdiffusion retry (Decision A) | Must change contigs/hotspots per retry or cache returns same result (see memory) |
 | ESMFold vs AlphaFold2 | Free tier uses ESMFold for monomer folding — AF2 single-chain also 504s |
+| Job persistence | In-memory only — no disk store yet |
