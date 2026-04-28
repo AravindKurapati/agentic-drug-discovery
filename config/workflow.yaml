@@ -1,0 +1,79 @@
+# config/workflow.yaml — NeMo Agent Toolkit (nat v1.6) workflow config
+#
+# Run:  nat run --config_file config/workflow.yaml --input "EGFR"
+# Serve: nat serve --config_file config/workflow.yaml
+
+general:
+  use_uvloop: false
+
+functions:
+  fetch_sequence:
+    _type: fetch_sequence
+
+  run_alphafold2:
+    _type: run_alphafold2
+
+  run_rfdiffusion:
+    _type: run_rfdiffusion
+    n_designs: 5
+    diffusion_steps: 15
+
+  run_proteinmpnn:
+    _type: run_proteinmpnn
+
+  run_af2_multimer_batch:
+    _type: run_af2_multimer_batch
+
+  query_literature:
+    _type: query_literature
+    n_results: 5
+
+  generate_report:
+    _type: generate_report
+
+llms:
+  nim_llm:
+    _type: nim
+    model_name: meta/llama-3.3-70b-instruct
+    temperature: 0.0
+    max_tokens: 4096
+
+workflow:
+  _type: react_agent
+  tool_names:
+    - fetch_sequence
+    - run_alphafold2
+    - run_rfdiffusion
+    - run_proteinmpnn
+    - run_af2_multimer_batch
+    - query_literature
+    - generate_report
+  llm_name: nim_llm
+  verbose: true
+  parse_agent_response_max_retries: 3
+  system_prompt: |
+    You are a protein binder design agent. Given a protein target (UniProt ID or name),
+    execute the full pipeline in this exact order:
+
+    1. fetch_sequence(uniprot_id) → amino acid sequence string
+    2. run_alphafold2(sequence) → target PDB string
+    3. run_rfdiffusion(target_pdb, contigs, hotspot_res="")
+       - Initial contigs: "B50-100/0 A1-300"
+       - Returns JSON: {"pdbs": [...], "mean_plddt": float}
+       DECISION A: If mean_plddt < 70, adjust contigs by widening binder length
+       range by 20 residues (e.g. "B50-100" → "B70-120"), then retry run_rfdiffusion.
+       Maximum 2 retries. Each retry MUST use different contigs from previous call.
+       Log each decision: "DECISION_A: [PASS|RETRY_1|RETRY_2] mean_plddt=X.X contigs=..."
+    4. run_proteinmpnn(backbones_json) → JSON list of {backbone_idx, sequence}
+    5. Build candidates list: for each {backbone_idx, sequence}, create
+       {candidate_id: "cand_{backbone_idx}", binder_sequence: sequence, target_sequence: <from step 1>}
+       Call run_af2_multimer_batch(JSON with "candidates" list and "pdockq_threshold": 0.23)
+       Returns scored candidates annotated with "kept" bool and "discard_reason".
+       DECISION B is applied inside run_af2_multimer_batch automatically.
+       Log: "DECISION_B: kept N, discarded M"
+    6. query_literature(JSON with "target" and "query_text": "<target> protein binder design")
+    7. generate_report(JSON with "target", "scored_candidates", "literature", "decision_log")
+       where decision_log is all DECISION_A and DECISION_B log lines concatenated.
+
+    All NIM calls are disk-cached — repeat runs cost zero credits.
+    Never call NIM APIs directly. Always use the provided tools.

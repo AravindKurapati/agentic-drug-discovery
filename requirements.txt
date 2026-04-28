@@ -1,0 +1,29 @@
+# NIM API and HTTP
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Protein structure parsing + PubMed (Entrez)
+biopython>=1.84
+numpy>=1.26.0
+
+# RAG
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+
+# Serverless compute
+modal>=0.64.0
+
+# REST API + SSE for the React frontend
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sse-starlette>=2.0.0
+
+# Visualization (notebook/report rendering)
+py3Dmol>=2.0.0
+
+# NeMo Agent Toolkit — install from source:
+#   pip install git+https://github.com/NVIDIA/NeMo-Agent-Toolkit.git
+# or follow: https://docs.nvidia.com/nemo/agent-toolkit/latest/
+
+# Development / testing
+pytest>=8.0.0

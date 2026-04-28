@@ -110,7 +110,7 @@ All calls go through `nim_cache.py` — disk cache keyed by SHA-256 of the input
 
 ### pDockQ (predicted DockQ — no reference structure needed)
 - Standard metric for de novo binder screening (Björn Wallner lab)
-- Formula: `pDockQ = 0.724 / (1 + exp(-0.052 * (mean_interface_pLDDT - 152.611))) + 0.018`
+- Formula: `x = mean_interface_pLDDT * ln(n_contacts + 1)` → `pDockQ = 0.724 / (1 + exp(-0.052 * (x - 152.611))) + 0.018`
 - Source: Computed from AF2-Multimer output by `modal_jobs/scoring_job.py`
 - Threshold: > 0.23 = likely binder (literature standard)
 
