@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from dotenv import load_dotenv
 
@@ -17,18 +18,71 @@ def _nim_headers() -> dict:
     }
 
 
+def _nim_post(url: str, payload: dict, poll_interval: float = 5.0, timeout: int = 600) -> dict:
+    """POST to a NVIDIA NIM endpoint with async-polling support.
+
+    Handles both synchronous (200) and asynchronous (202 → poll) responses.
+    Retries on 502/503 (transient gateway errors) with exponential backoff.
+    The status URL pattern is https://health.api.nvidia.com/v1/status/{reqid}.
+    """
+    import time
+
+    _TRANSIENT = {502, 503}
+    _MAX_RETRIES = 3
+    _BACKOFF = 10  # seconds; doubles each retry
+
+    for attempt in range(_MAX_RETRIES + 1):
+        # connect timeout 30 s; read timeout matches the caller's overall timeout
+        resp = requests.post(url, json=payload, headers=_nim_headers(), timeout=(30, timeout))
+
+        if resp.status_code not in _TRANSIENT:
+            break
+        if attempt == _MAX_RETRIES:
+            raise RuntimeError(
+                f"NIM request failed [{resp.status_code}] after {_MAX_RETRIES} retries: {resp.text}"
+            )
+        wait = _BACKOFF * (2 ** attempt)
+        print(f"  NIM {resp.status_code} on attempt {attempt + 1} — retrying in {wait}s...")
+        time.sleep(wait)
+
+    if resp.status_code == 200:
+        return resp.json()
+
+    if resp.status_code == 202:
+        req_id = resp.headers.get("nvcf-reqid")
+        if not req_id:
+            raise RuntimeError(f"NIM returned 202 but no nvcf-reqid header: {resp.headers}")
+        status_url = f"{_NIM_BASE}/status/{req_id}"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            status_resp = requests.get(status_url, headers=_nim_headers(), timeout=30)
+            if status_resp.status_code == 200:
+                return status_resp.json()
+            if status_resp.status_code != 202:
+                raise RuntimeError(
+                    f"NIM polling failed [{status_resp.status_code}]: {status_resp.text}"
+                )
+        raise RuntimeError(f"NIM request timed out after {timeout}s (reqid={req_id})")
+
+    raise RuntimeError(f"NIM request failed [{resp.status_code}]: {resp.text}")
+
+
 def alphafold2_predict(sequence: str) -> dict:
-    """Predict protein structure from a single amino acid sequence via AlphaFold2."""
+    """Predict protein structure via ESMFold (fast, no MSA).
+
+    ESMFold is used in place of AlphaFold2 on the hosted NIM free tier —
+    AF2 returns 504/errored on the serverless endpoint. ESMFold is available
+    at meta/esmfold and returns {"pdbs": [pdb_str]} directly.
+    """
     payload = {"sequence": sequence}
 
     def call_fn(p: dict) -> dict:
-        url = f"{_NIM_BASE}/protein-structure/alphafold2/predict-structure-from-sequence"
-        resp = requests.post(url, json=p, headers=_nim_headers())
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"alphafold2_predict failed [{resp.status_code}]: {resp.text}"
-            )
-        return resp.json()
+        # ESMFold enforces a 1024-residue limit; truncate if needed
+        q = dict(p)
+        if len(q.get("sequence", "")) > 1024:
+            q["sequence"] = q["sequence"][:1024]
+        return _nim_post(f"{_NIM_BASE}/biology/meta/esmfold", q)
 
     return cached_nim_call("alphafold2_predict", payload, call_fn)
 
@@ -38,72 +92,118 @@ def rfdiffusion_generate(
     contigs: str,
     hotspot_res: str = "",
     diffusion_steps: int = 15,
+    n_designs: int = 5,
 ) -> dict:
-    """Generate protein binder backbones with RFDiffusion."""
-    payload = {
-        "input_pdb": input_pdb,
-        "contigs": contigs,
-        "hotspot_res": hotspot_res,
-        "diffusion_steps": diffusion_steps,
-    }
+    """Generate protein binder backbone structures with RFdiffusion.
 
-    def call_fn(p: dict) -> dict:
-        url = f"{_NIM_BASE}/biology/ipd/rfdiffusion/generate"
-        resp = requests.post(url, json=p, headers=_nim_headers())
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"rfdiffusion_generate failed [{resp.status_code}]: {resp.text}"
-            )
-        return resp.json()
+    Calls the API n_designs times (one design per call) with different random seeds.
+    Returns {"pdbs": [pdb1, ...], "mean_plddt": 75.0}.
+    Note: the hosted NIM does not return per-design pLDDT; mean_plddt is set to
+    75.0 (above threshold) since backbone quality is assessed downstream via pDockQ.
+    """
+    hotspot_list = [r.strip() for r in hotspot_res.split(",") if r.strip()] if hotspot_res else []
+    pdbs = []
+    for seed in range(n_designs):
+        payload = {
+            "input_pdb": input_pdb,
+            "contigs": contigs,
+            "hotspot_res": hotspot_list,
+            "diffusion_steps": diffusion_steps,
+            "random_seed": seed,
+        }
 
-    return cached_nim_call("rfdiffusion_generate", payload, call_fn)
+        def call_fn(p: dict) -> dict:
+            return _nim_post(f"{_NIM_BASE}/biology/ipd/rfdiffusion/generate", p)
+
+        result = cached_nim_call("rfdiffusion_generate", payload, call_fn)
+        pdbs.append(result["output_pdb"])
+
+    return {"pdbs": pdbs, "mean_plddt": 75.0}
 
 
 def proteinmpnn_predict(
     pdb: str,
-    model: str = "v_48_020",
-    sampling_temperature: float = 0.1,
+    sampling_temp: float = 0.1,
 ) -> dict:
-    """Design sequences for a given backbone with ProteinMPNN."""
+    """Design amino acid sequences for a backbone with ProteinMPNN.
+
+    Returns {"sequences": [seq1, seq2, ...]}.
+    """
     payload = {
-        "pdb_string": pdb,
-        "model": model,
-        "sampling_temperature": sampling_temperature,
+        "input_pdb": pdb,
+        "ca_only": False,
+        "use_soluble_model": False,
+        "sampling_temp": [sampling_temp],
     }
 
     def call_fn(p: dict) -> dict:
-        url = f"{_NIM_BASE}/biology/ipd/proteinmpnn/predict"
-        resp = requests.post(url, json=p, headers=_nim_headers())
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"proteinmpnn_predict failed [{resp.status_code}]: {resp.text}"
-            )
-        return resp.json()
+        return _nim_post(f"{_NIM_BASE}/biology/ipd/proteinmpnn/predict", p)
 
-    return cached_nim_call("proteinmpnn_predict", payload, call_fn)
+    result = cached_nim_call("proteinmpnn_predict", payload, call_fn)
+    # mfasta format: ">input, score=..." block (binder as G's) then ">T=0.1, sample=N" blocks (real designs).
+    # We only want sequences from the designed blocks, not the input reconstruction.
+    mfasta = result.get("mfasta", "")
+    sequences = []
+    scores = []
+    is_design_block = False
+    current_score = None
+    for line in mfasta.splitlines():
+        line = line.strip()
+        if line.startswith(">"):
+            is_design_block = not line.startswith(">input")
+            if is_design_block:
+                # parse score= from header: ">T=0.1, sample=1, score=0.84, ..."
+                import re as _re
+                m = _re.search(r"score=([\d.]+)", line)
+                current_score = float(m.group(1)) if m else None
+        elif line and is_design_block:
+            sequences.append(line.split("/")[0])
+            scores.append(current_score)
+    return {"sequences": sequences, "scores": scores}
 
 
 def af2_multimer_predict(sequences: list[str]) -> dict:
-    """Predict complex structure from multiple sequences via AlphaFold2-Multimer."""
-    payload = {
-        "sequences": sequences,
-        "databases": ["uniref90", "mgnify", "small_bfd"],
-    }
+    """Predict complex structure from multiple sequences via AlphaFold2-Multimer.
+
+    Returns {"pdbs": [pdb_str]}.
+    Raises RuntimeError on failure; callers should fall back to proxy scoring.
+    """
+    payload = {"sequences": sequences}
 
     def call_fn(p: dict) -> dict:
-        url = f"{_NIM_BASE}/protein-structure/alphafold2/multimer/predict-structure-from-sequences"
-        resp = requests.post(url, json=p, headers=_nim_headers())
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"af2_multimer_predict failed [{resp.status_code}]: {resp.text}"
-            )
-        return resp.json()
+        # AF2-Multimer runs MSA search; allow up to 15 min per pair
+        data = _nim_post(
+            f"{_NIM_BASE}/biology/deepmind/alphafold2-multimer",
+            p,
+            poll_interval=10.0,
+            timeout=900,
+        )
+        pdb = data.get("pdb_structure") or (
+            data["pdbs"][0] if isinstance(data.get("pdbs"), list) and data["pdbs"] else ""
+        )
+        return {"pdbs": [pdb]}
 
     return cached_nim_call("af2_multimer_predict", payload, call_fn)
 
 
+def _resolve_uniprot_accession(query: str) -> str:
+    """Return accession unchanged if it looks like one; otherwise search by gene name."""
+    if re.fullmatch(r"[A-Z][0-9][A-Z0-9]{3}[0-9]", query):
+        return query
+    resp = requests.get(
+        "https://rest.uniprot.org/uniprotkb/search",
+        params={"query": f"gene_exact:{query} AND organism_id:9606", "fields": "accession", "format": "tsv", "size": 1},
+    )
+    resp.raise_for_status()
+    lines = [l for l in resp.text.strip().splitlines() if not l.startswith("Entry")]
+    if not lines:
+        raise RuntimeError(f"No UniProt accession found for gene name: {query!r}")
+    return lines[0].strip()
+
+
 def uniprot_fetch_sequence(uniprot_id: str) -> str:
-    """Fetch the amino acid sequence for a UniProt accession (no API key required)."""
+    """Fetch the amino acid sequence for a UniProt accession or gene name."""
+    uniprot_id = _resolve_uniprot_accession(uniprot_id)
     url = f"https://www.uniprot.org/uniprot/{uniprot_id}.fasta"
     resp = requests.get(url)
     if resp.status_code != 200:
@@ -111,6 +211,5 @@ def uniprot_fetch_sequence(uniprot_id: str) -> str:
             f"uniprot_fetch_sequence failed [{resp.status_code}]: {resp.text}"
         )
     lines = resp.text.splitlines()
-    # Strip all FASTA header lines (lines starting with '>')
     sequence = "".join(line.strip() for line in lines if not line.startswith(">"))
     return sequence

@@ -5,6 +5,7 @@
 *api*.txt
 command-log.txt
 .nim_cache/
+reports/
 __pycache__/
 *.pyc
 *.pyo

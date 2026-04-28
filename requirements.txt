@@ -13,6 +13,11 @@ sentence-transformers>=3.0.0
 # Serverless compute
 modal>=0.64.0
 
+# REST API + SSE for the React frontend
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sse-starlette>=2.0.0
+
 # Visualization (notebook/report rendering)
 py3Dmol>=2.0.0
 
